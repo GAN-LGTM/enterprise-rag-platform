@@ -1,0 +1,39 @@
+# ============================================================
+# 企业级知识检索中台 —— 核心依赖（最小可运行集）
+# 安装： pip install -r requirements.txt
+# ============================================================
+
+# --- Web 框架 & 服务 ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9          # 文档上传 multipart/form-data
+
+# --- 配置 / 校验 ---
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# --- 安全 ---
+PyJWT>=2.8.0                     # JWT 签发与校验
+bcrypt>=4.0.1                    # 密码哈希（不用 passlib，避免 3.13 兼容问题）
+
+# --- 存储 ---
+SQLAlchemy>=2.0.30
+psycopg[binary]>=3.1.18          # PostgreSQL 驱动
+pgvector>=0.3.0                  # pgvector 类型映射
+redis>=5.0.0                     # 高频问答缓存
+
+# --- 工作流编排 ---
+langgraph>=0.2.0                 # LangGraph 状态机（不可用时自动降级为内置 MiniGraph）
+langchain-core>=0.3.0
+
+# --- 可观测性 ---
+structlog>=24.1.0                # 结构化日志
+prometheus-client>=0.20.0        # 指标暴露
+
+# --- 网络 / 计算 ---
+httpx>=0.27.0                    # LLM HTTP 流式调用
+numpy>=1.26.0                    # 向量计算（降级模式）
+
+# --- 文档解析 / 报告导出（功能可选，缺失时对应功能自动降级并给出明确提示）---
+pypdf>=4.2.0                     # 解析 PDF 文档入库（缺失时上传 PDF 会提示安装）
+reportlab>=4.0.0                 # 合规报告 PDF 导出（缺失时导出接口提示改用 CSV / JSON）

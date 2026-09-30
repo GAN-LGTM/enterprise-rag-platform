@@ -1,0 +1,48 @@
+# 构建上下文排除清单
+#
+# 为什么必须有这个文件：Dockerfile 里是 `COPY backend /app/backend` 整目录拷贝。
+# backend/data 目录在真实运行过的机器上会包含 initial_admin.txt（管理员初始化明文口令）、
+# audit.json、refresh_tokens.json、token_blacklist.json 等运行时凭据与审计数据，
+# 不排除就会原样打进交付镜像 —— 等于把口令随镜像发给甲方。
+#
+# 注意：Dockerfile 需要 backend/（源码）、sql/、frontend/、requirements.txt，
+# 这些**不能**排除。
+
+# ---- 版本控制 / IDE ----
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+*.swp
+
+# ---- Python 虚拟环境与缓存 ----
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+coverage.json
+htmlcov
+
+# ---- 运行时数据 / 日志 / 备份（含敏感文件，绝不进镜像）----
+data
+logs
+backups
+backend/data
+backend/logs
+backend/backups
+
+# ---- 环境变量与密钥 ----
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# ---- 交付材料（含验收截图，镜像不需要）----
+delivery

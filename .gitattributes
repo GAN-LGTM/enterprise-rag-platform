@@ -1,0 +1,16 @@
+# 统一换行符，避免 Windows / macOS / Linux 协作时整文件 diff
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+
+# 前端 vendor 包标记为第三方，折叠 diff 噪音
+frontend/vendor/* linguist-vendored

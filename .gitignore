@@ -1,0 +1,98 @@
+# ============================================================
+# 企业级知识检索中台 · Git 忽略规则
+# ============================================================
+
+# ---- 机密与本地配置（严禁入库）----
+.env
+.env.*
+!.env.example
+!.env.production.example
+backend/data/initial_admin.txt
+*initial_admin*
+*token_blacklist*
+credentials*.json
+
+# ---- 运行数据与日志 ----
+backend/data/
+backend/logs/
+backend/backups/
+backend/.coverage
+backend/coverage.json
+backend/.pytest_cache/
+data/
+logs/
+backup/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 工具与临时文件 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.temp
+*.swp
+*~
+
+# ---- 开发期临时探针与调试产物（非源码，勿入库）----
+._*
+_*.txt
+_*.out
+_*.json
+_*.log
+_*.py
+.agent_*
+.chk*
+.snap*
+.diff.txt
+.deliver.txt
+.cleanup_ok.txt
+.pid.txt
+.proc.txt
+.ntf.txt
+.pdftest.*
+.shot_*.png
+.verify*.log
+.v[0-9].log
+.compile.log
+.reset.log
+.seed.log
+.selfcheck.log
+.workbuddy_*
+
+# ---- 浏览器自动化验证产物 ----
+.ab_*
+ab_*
+playwright-report/
+test-results/
+
+# ---- 调试期遗留产物（非源码，勿入库）----
+# _check.js 是早期把内联 <script> 整段复制出来做静态检查的快照，
+# 与 frontend/app.js 内容重复，保留仅供对照，前端运行不依赖它。
+frontend/_check.js
+frontend/*.bak
+frontend/node_modules/
+node_modules/
+
+# ---- 参考版式归档（开发期对照用，非运行依赖）----
+.backup-ref-layout/
+
+# ---- 甲方交付材料（含部署细节与演示口令，不公开）----
+delivery/
+
+# ---- 测试过程生成的临时语料 ----
+data/docs/*_e2e_doc.md
+data/docs/*_travel.md
