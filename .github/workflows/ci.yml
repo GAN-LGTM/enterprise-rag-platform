@@ -1,0 +1,164 @@
+# ============================================================
+# CI 质量门禁（企业级交付：每次改动都必须过这道闸）
+#   触发：push / PR 到 main、develop
+#   门禁：① 后端编译 ② 依赖锁定一致性 ③ pytest 单测 ④ 15 个回归套件
+#         ⑤ 前端语法 ⑥ 交付卫生检查（敏感文件不得入库）⑦ 镜像可构建
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# 同名分支并发时取消旧任务，省机器也避免结果混淆
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  backend:
+    name: 后端 · 单测与回归套件
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ../requirements.txt
+          pip install -r ../requirements-dev.txt
+
+      - name: 编译检查（语法/导入层面）
+        run: python -m compileall -q app scripts
+
+      - name: 依赖锁定一致性（离线安装可复现）
+        run: python -u scripts/check_dep_lock.py
+
+      - name: pytest 单元测试
+        run: python -m pytest tests/ -q --tb=short
+
+      - name: 功能回归套件（不需要外部服务）
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: python -u scripts/run_all_tests.py
+
+      - name: 覆盖率
+        run: |
+          python -m coverage run --source=app -m pytest tests/ -q || true
+          python -m coverage report --show-missing --skip-covered | tail -30
+
+  frontend:
+    name: 前端 · 语法检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: 语法检查（app.js / antd-bridge.js）
+        run: |
+          # vendor 为第三方库，跳过
+          node --check frontend/app.js
+          node --check frontend/antd-bridge.js
+      - name: HTML 基本结构检查
+        run: |
+          grep -q "<!DOCTYPE html>" frontend/index.html
+          grep -q "app.js" frontend/index.html
+
+  hygiene:
+    name: 交付卫生 · 敏感文件不得入库
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查机密文件未被提交
+        run: |
+          set -e
+          echo "检查 .env（只应存在 .env.example）…"
+          if git ls-files | grep -xE "\.env" ; then
+            echo "::error::.env 被提交进仓库，立即移除并轮换其中的密钥！"
+            exit 1
+          fi
+          echo "检查运行时数据/日志…"
+          if git ls-files | grep -E "(^|/)(data|logs|backups)/" ; then
+            echo "::error::运行时数据或日志被提交进仓库"
+            exit 1
+          fi
+          if git ls-files | grep -E "\.log$|\.zip$|initial_admin" ; then
+            echo "::error::日志/备份/初始口令文件被提交进仓库"
+            exit 1
+          fi
+          echo "OK 交付卫生检查通过"
+
+      - name: 检查镜像构建上下文排除清单
+        run: |
+          # 没有 .dockerignore 时 `COPY backend /app/backend` 会把 backend/data
+          # （含 initial_admin.txt 明文口令、审计与令牌文件）原样打进交付镜像。
+          set -e
+          test -f .dockerignore || {
+            echo "::error::缺少 .dockerignore：运行时数据与密钥会被打进镜像"; exit 1; }
+          for pat in "backend/data" "backend/logs" "backend/backups" ".env" ".env.*"; do
+            grep -qxF "$pat" .dockerignore || {
+              echo "::error::.dockerignore 缺少排除项：$pat"; exit 1; }
+          done
+          echo "OK .dockerignore 已覆盖运行时数据与密钥"
+
+      - name: 版本号一致性（三处默认值必须相同）
+        run: |
+          # APP_VERSION 的唯一有效来源是 .env.production；另两处是未配置时的兜底默认值，
+          # 一旦漂移就会出现"健康检查报 A 版、镜像 tag 是 B 版、备份清单记 C 版"。
+          set -e
+          v_cfg=$(grep -oE 'APP_VERSION: str = "[^"]+"' backend/app/config.py | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          v_compose=$(grep -oE 'rag-platform:\$\{APP_VERSION:-[^}]+\}' deploy/docker-compose.prod.yml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          v_env=$(grep -oE '^APP_VERSION=.*' .env.production.example | cut -d= -f2 | tr -d '\r')
+          echo "config.py=$v_cfg  compose=$v_compose  .env.production.example=$v_env"
+          if [ "$v_cfg" != "$v_compose" ] || [ "$v_cfg" != "$v_env" ]; then
+            echo "::error::APP_VERSION 三处默认值不一致，发版时请同步"
+            exit 1
+          fi
+          echo "OK 版本号三处一致：$v_cfg"
+
+  docker:
+    name: 镜像 · 可构建性验证
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验生产编排可解析（语法 + 变量插值）
+        run: |
+          # 生产 compose 用 ${PG_PASSWORD:?} 这类必填插值，语法或变量名写错时
+          # 只有真正部署那一刻才会发现。这里用配置模板先验一遍。
+          set -e
+          cp .env.production.example .env.production
+          docker compose --env-file .env.production \
+            -f deploy/docker-compose.prod.yml config -q
+          echo "OK 生产编排可解析"
+
+      - uses: docker/setup-buildx-action@v3
+      - name: 构建生产镜像（不推送，只验证 Dockerfile 可跑通）
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          push: false
+          tags: rag-platform:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
