@@ -1,4 +1,3 @@
-# syntax=dockerfile:1
 # ============================================================
 # 生产交付镜像（私有化部署）
 #   构建：docker build -f deploy/Dockerfile -t rag-platform:<version> .
