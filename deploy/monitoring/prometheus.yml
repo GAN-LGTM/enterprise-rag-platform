@@ -1,0 +1,36 @@
+# ============================================================
+# Prometheus 抓取配置（生产）
+#   prometheus -config.file=deploy/monitoring/prometheus.yml
+#   规则文件：deploy/monitoring/alerts.yml（同目录）
+# ============================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    system: enterprise-rag-platform
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  # ---- 应用（FastAPI /metrics）----
+  - job_name: rag-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rag-api:8000"]
+    # 生产建议开启鉴权后再暴露；本文件假设 Prometheus 与应用同处 rag-internal 网络
+
+  # ---- PostgreSQL（需 postgres_exporter）----
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # ---- Redis（需 redis_exporter）----
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # ---- 节点/容器资源（需 node_exporter 或 cAdvisor）----
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]

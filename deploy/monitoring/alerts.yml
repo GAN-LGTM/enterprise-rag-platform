@@ -1,0 +1,139 @@
+# ============================================================
+# 告警规则（企业级运维：有指标没告警 = 出事没人知道）
+# ------------------------------------------------------------
+# 指标与标签均取自 backend/app/metrics.py 的真实定义：
+#   rag_requests_total{endpoint,status}
+#   rag_request_latency_seconds{endpoint}         (Histogram)
+#   rag_node_latency_seconds{node}                (Histogram)
+#   rag_intent_total{intent}
+#   rag_cache_total{result}                       hit / miss
+#   rag_permission_denied_total{reason}
+#   rag_llm_calls_total{model,status}             ok / timeout / empty / error / unavailable
+#   rag_llm_tokens_total{model}
+#   rag_stream_active                             (Gauge)
+#
+# severity 约定：
+#   critical —— 立即处理（服务不可用 / 数据风险）
+#   warning  —— 当班处理（性能劣化 / 异常趋势）
+#   info     —— 关注即可（容量 / 行为变化）
+# ============================================================
+groups:
+  - name: rag-availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job="rag-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "RAG 服务不可用"
+          description: "rag-api 实例 {{ $labels.instance }} 已掉线 1 分钟以上，检查容器存活与数据库连通性。"
+
+      - alert: ApiErrorRateHigh
+        expr: |
+          sum(rate(rag_requests_total{status!="ok"}[5m]))
+            / clamp_min(sum(rate(rag_requests_total[5m])), 0.001) > 0.10
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "API 错误率超过 10%"
+          description: "近 5 分钟错误率 {{ $value | humanizePercentage }}。查日志 trace_id 定位失败环节。"
+
+  - name: rag-llm
+    rules:
+      - alert: LlmUnavailable
+        expr: increase(rag_llm_calls_total{status="unavailable"}[10m]) > 0
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: "所有 LLM 后端均不可用"
+          description: "出现 status=unavailable，说明主备模型全部失效。检查 vLLM/OpenAI 兼容服务与熔断状态。"
+
+      - alert: LlmFailureRateHigh
+        expr: |
+          sum(rate(rag_llm_calls_total{status=~"timeout|error|empty"}[5m]))
+            / clamp_min(sum(rate(rag_llm_calls_total[5m])), 0.001) > 0.20
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "LLM 失败率超过 20%"
+          description: "近 5 分钟 LLM 调用失败率 {{ $value | humanizePercentage }}，模型服务可能过载或网络抖动。"
+
+      - alert: LlmTimeoutSustained
+        expr: rate(rag_llm_calls_total{status="timeout"}[5m]) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "LLM 持续超时"
+          description: "每秒超时 {{ $value | humanize }} 次且已持续 10 分钟，考虑扩容推理服务或调小 max_tokens。"
+
+  - name: rag-performance
+    rules:
+      - alert: RequestLatencyP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, endpoint) (rate(rag_request_latency_seconds_bucket[5m]))
+          ) > 8
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.endpoint }} P95 延迟超过 8 秒"
+          description: "P95 = {{ $value | humanizeDuration }}。先查 rag_node_latency_seconds 定位是检索还是生成慢。"
+
+      - alert: NodeLatencySlow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, node) (rate(rag_node_latency_seconds_bucket[5m]))
+          ) > 5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "工作流节点 {{ $labels.node }} 变慢"
+          description: "该节点 P95 = {{ $value | humanizeDuration }}，通常是向量检索或外部工具（行情/天气/百科）超时。"
+
+      - alert: StreamBacklog
+        expr: rag_stream_active > 200
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "SSE 活跃流堆积（当前 {{ $value }}）"
+          description: "可能存在未正常关闭的连接或下游消费阻塞，检查客户端断连处理与反向代理缓冲设置。"
+
+  - name: rag-security
+    rules:
+      - alert: PermissionDeniedSpike
+        expr: sum(rate(rag_permission_denied_total[10m])) > 2
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "权限拦截次数异常升高"
+          description: "每秒 {{ $value | humanize }} 次越权访问被拦截。可能是越权探测行为，请核对审计日志中的账号。"
+
+      - alert: PublicDeniedProbe
+        expr: increase(rag_permission_denied_total{reason="public_denied"}[30m]) > 20
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "大量访问公共区被拒"
+          description: "30 分钟内 {{ $value }} 次，检查账号部门授权配置是否正确。"
+
+  - name: rag-cache
+    rules:
+      - alert: CacheHitRateDropped
+        expr: |
+          sum(rate(rag_cache_total{result="hit"}[30m]))
+            / clamp_min(sum(rate(rag_cache_total[30m])), 0.001) < 0.05
+        for: 15m
+        labels: {severity: info}
+        annotations:
+          summary: "缓存命中率跌破 5%"
+          description: "Redis 可能已失效（降级到本地 LRU），或业务量过小导致样本不足。命中率低会推高 LLM 成本与延迟。"
+
+  - name: rag-business
+    rules:
+      - alert: NoTraffic
+        expr: sum(rate(rag_requests_total[30m])) == 0
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "近 30 分钟无任何请求"
+          description: "正常工作时段无流量，可能是前端或网关故障，也可能是探针未覆盖到该实例。"
